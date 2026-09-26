@@ -19,7 +19,8 @@
 #include "esp_err.h"
 #include "esp_wifi.h"
 #include "status_led.h"
-
+#include "esp_now.h"
+#include "string.h"
 static void example_wifi_init(void)
     {
     ESP_ERROR_CHECK(esp_netif_init());
@@ -47,6 +48,18 @@ static void print_wifi_channel(void){
     ESP_ERROR_CHECK(esp_wifi_get_channel(&primary, &second));
     printf("Wi-Fi primary channel: %u\n", (unsigned)primary);
 }
+static void init_esp_now_broadcast(void){
+    ESP_ERROR_CHECK(esp_now_init());
+    const uint8_t broadcast_addr[ESP_NOW_ETH_ALEN]={ 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+    esp_now_peer_info_t peer = {0};
+    memcpy(peer.peer_addr, broadcast_addr, sizeof(broadcast_addr));
+    peer.channel=CONFIG_ESPNOW_CHANNEL;
+    peer.ifidx=WIFI_IF_STA;
+    peer.encrypt=false;
+    ESP_ERROR_CHECK(esp_now_add_peer(&peer));
+    printf("ESP-NOW ready: broadcast peer registered\n");
+
+}
 void app_main(void)
 {
     printf("honest_node: skeleton. Begin at Step 4.\n");
@@ -55,6 +68,7 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_flash_init());
     example_wifi_init();
     print_wifi_channel();
+    init_esp_now_broadcast();
     print_station_mac();
 
     for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
