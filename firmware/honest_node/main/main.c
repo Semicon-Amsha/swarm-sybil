@@ -29,7 +29,7 @@ static void example_wifi_init(void)
     ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK( esp_wifi_start());
-    ESP_ERROR_CHECK( esp_wifi_set_channel(CONFIG_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
+    ESP_ERROR_CHECK( esp_wifi_set_channel(6, WIFI_SECOND_CHAN_NONE));
     #if CONFIG_ESPNOW_ENABLE_LONG_RANGE
     ESP_ERROR_CHECK( esp_wifi_set_protocol(ESPNOW_WIFI_IF, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N|WIFI_PROTOCOL_LR) );
     #endif
@@ -41,6 +41,12 @@ static void print_station_mac(void){
         (unsigned)mac[0], (unsigned)mac[1], (unsigned)mac[2],
         (unsigned)mac[3], (unsigned)mac[4], (unsigned)mac[5]);
 }
+static void print_wifi_channel(void){
+    uint8_t primary;
+    wifi_second_chan_t second;
+    ESP_ERROR_CHECK(esp_wifi_get_channel(&primary, &second));
+    printf("Wi-Fi primary channel: %u\n", (unsigned)primary);
+}
 void app_main(void)
 {
     printf("honest_node: skeleton. Begin at Step 4.\n");
@@ -48,6 +54,7 @@ void app_main(void)
     status_rgb(false, true, false);
     ESP_ERROR_CHECK(nvs_flash_init());
     example_wifi_init();
+    print_wifi_channel();
     print_station_mac();
 
     for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
