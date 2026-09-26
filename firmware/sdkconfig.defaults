@@ -1,0 +1,7 @@
+# Shared build defaults for honest_node and attacker_node.
+# CSI must be on for the honest node; harmless on the attacker.
+CONFIG_ESP_WIFI_CSI_ENABLED=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
+CONFIG_ESP_TASK_WDT_EN=n
+CONFIG_COMPILER_OPTIMIZATION_PERF=y

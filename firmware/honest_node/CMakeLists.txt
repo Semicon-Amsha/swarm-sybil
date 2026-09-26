@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.16)
+# Pull shared defaults (CSI on, 921600 baud, 1 kHz tick)
+set(SDKCONFIG_DEFAULTS "${CMAKE_CURRENT_LIST_DIR}/../sdkconfig.defaults")
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(honest_node)

@@ -1,0 +1,11 @@
+menu "Honest Node Configuration"
+
+config ESPNOW_CHANNEL
+    int "ESP-NOW Wi-Fi channel"
+    range 1 13
+    default 1
+    help
+        Wi-Fi channel used by ESP-NOW. All communicating ESP-NOW nodes
+        must use the same channel.
+
+endmenu
