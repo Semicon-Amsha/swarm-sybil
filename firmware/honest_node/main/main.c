@@ -21,6 +21,15 @@
 #include "status_led.h"
 #include "esp_now.h"
 #include "string.h"
+
+#define ROLE_SENDER 1
+#define ESP_NOW_CHANNEL 6
+const uint8_t broadcast_addr[ESP_NOW_ETH_ALEN]={ 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+#if ROLE_SENDER
+        static void on_sent(const uint8_t *mac_addr,
+                    esp_now_send_status_t status);
+        static void sender_task(void *arg);
+#endif
 static void example_wifi_init(void)
     {
     ESP_ERROR_CHECK(esp_netif_init());
@@ -30,7 +39,7 @@ static void example_wifi_init(void)
     ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK( esp_wifi_start());
-    ESP_ERROR_CHECK( esp_wifi_set_channel(6, WIFI_SECOND_CHAN_NONE));
+    ESP_ERROR_CHECK( esp_wifi_set_channel(ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
     #if CONFIG_ESPNOW_ENABLE_LONG_RANGE
     ESP_ERROR_CHECK( esp_wifi_set_protocol(ESPNOW_WIFI_IF, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N|WIFI_PROTOCOL_LR) );
     #endif
@@ -50,16 +59,56 @@ static void print_wifi_channel(void){
 }
 static void init_esp_now_broadcast(void){
     ESP_ERROR_CHECK(esp_now_init());
-    const uint8_t broadcast_addr[ESP_NOW_ETH_ALEN]={ 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
     esp_now_peer_info_t peer = {0};
+    #if ROLE_SENDER
+       ESP_ERROR_CHECK(esp_now_register_send_cb(on_sent));
+    #endif
     memcpy(peer.peer_addr, broadcast_addr, sizeof(broadcast_addr));
-    peer.channel=CONFIG_ESPNOW_CHANNEL;
+    peer.channel=ESP_NOW_CHANNEL;
     peer.ifidx=WIFI_IF_STA;
     peer.encrypt=false;
     ESP_ERROR_CHECK(esp_now_add_peer(&peer));
     printf("ESP-NOW ready: broadcast peer registered\n");
 
 }
+// static void on_sent(const uint8_t*mac_addr, esp_now_send_status_t status){
+
+// }
+#if ROLE_SENDER
+
+static void on_sent(const uint8_t *mac_addr,
+                    esp_now_send_status_t status)
+{
+    printf("ESP-NOW send: %s\n",
+           status == ESP_NOW_SEND_SUCCESS
+               ? "success"
+               : "failed");
+}
+
+static void sender_task(void *arg)
+{
+    uint32_t counter = 0;
+
+    for (;;) {
+        esp_err_t err = esp_now_send(
+            broadcast_addr,
+            (const uint8_t *)&counter,
+            sizeof(counter)
+        );
+
+        if (err != ESP_OK) {
+            printf("ESP-NOW send request failed: %s\n",
+                   esp_err_to_name(err));
+        }
+
+        counter++;
+
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+}
+
+#endif
+
 void app_main(void)
 {
     printf("honest_node: skeleton. Begin at Step 4.\n");
@@ -70,6 +119,9 @@ void app_main(void)
     print_wifi_channel();
     init_esp_now_broadcast();
     print_station_mac();
+    #if ROLE_SENDER
+    xTaskCreate(sender_task, "sender", 4096, NULL, 5, NULL);
+    #endif
 
     for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
     
