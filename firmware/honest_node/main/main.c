@@ -20,6 +20,11 @@
 const uint8_t broadcast_addr[ESP_NOW_ETH_ALEN]={ 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 static uint8_t g_my_mac[6];
 
+static volatile uint32_t g_received_count = 0;
+static volatile uint32_t g_baseline_seq   = 0;
+static volatile uint32_t g_last_seq       = 0;
+static volatile bool     g_have_baseline  = false;
+
 #if ROLE_SENDER
 
 static void on_sent(const uint8_t *mac_addr,
@@ -71,6 +76,13 @@ static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int le
         return;
     }
 
+    if (!g_have_baseline){
+        g_baseline_seq=pkt.seq;
+        g_have_baseline=true;
+    }
+    g_last_seq=pkt.seq;
+    g_received_count++;
+
     printf("from %02X:%02X  seq=%lu\n",
            info->src_addr[4], info->src_addr[5],
            (unsigned long)pkt.seq);
@@ -120,8 +132,20 @@ static void init_esp_now_broadcast(void){
     printf("ESP-NOW ready: broadcast peer registered\n");
 
 }
+static void link_stat_task(void * arg){
+    for (;;){
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        if (!g_have_baseline){
+            continue;
+        }
+        uint32_t expected= g_last_seq-g_baseline_seq+1;
+        uint32_t actual= g_received_count;
 
-
+        float loss_percent= (1-((float)actual/expected))*100;
+        printf("link: rx=%lu  expected=%lu  loss=%.2f%%\n",
+               (unsigned long)actual, (unsigned long)expected, loss_percent);
+    }
+}
 void app_main(void)
 {
     printf("honest_node: skeleton. Begin at Step 4.\n");
@@ -136,6 +160,10 @@ void app_main(void)
 
     #if ROLE_SENDER
     xTaskCreate(sender_task, "sender", 4096, NULL, 5, NULL);
+    #endif
+
+    #if !ROLE_SENDER
+    xTaskCreate(link_stat_task, "receiver", 4096, NULL,5, NULL);
     #endif
 
     for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
