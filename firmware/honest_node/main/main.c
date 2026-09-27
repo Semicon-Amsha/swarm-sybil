@@ -1,12 +1,4 @@
-/* honest_node - W-MSR consensus + CSI fingerprint trust layer.
- *
- * Assembled across the build guide:
- *   Steps 4-8   ESP-NOW link, packet format, neighbour table
- *   Steps 9-12  consensus, sensor anchor, W-MSR trim, telemetry
- *   Steps 18-27 CSI capture, fingerprints, clustering, trust fusion
- *
- * Start at Step 4 with the smallest thing that works and grow it.
- */
+
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -21,10 +13,13 @@
 #include "status_led.h"
 #include "esp_now.h"
 #include "string.h"
+#include "protocol.h"
 
 #define ROLE_SENDER 0
 #define ESP_NOW_CHANNEL 6
 const uint8_t broadcast_addr[ESP_NOW_ETH_ALEN]={ 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+static uint8_t g_my_mac[6];
+
 #if ROLE_SENDER
 
 static void on_sent(const uint8_t *mac_addr,
@@ -36,40 +31,50 @@ static void on_sent(const uint8_t *mac_addr,
                : "failed");
 }
 
+
 static void sender_task(void *arg)
 {
-    uint32_t counter = 0;
+    swarm_pkt_t pkt = {0};   
+    pkt.magic =PKT_MAGIC ;      
+    memcpy(pkt.src_id, g_my_mac, 6); 
 
     for (;;) {
         esp_err_t err = esp_now_send(
             broadcast_addr,
-            (const uint8_t *)&counter,
-            sizeof(counter)
+            (const uint8_t *)&pkt,
+            sizeof(pkt) 
         );
 
         if (err != ESP_OK) {
-            printf("ESP-NOW send request failed: %s\n",
-                   esp_err_to_name(err));
+            printf("ESP-NOW send request failed: %s\n", esp_err_to_name(err));
         }
 
-        counter++;
-
+        pkt.seq++;
         vTaskDelay(pdMS_TO_TICKS(200));
     }
 }
-
 #endif
 
 #if !ROLE_SENDER
 
-static void on_recv(const esp_now_recv_info_t * info, const uint8_t * data, int len){
-    if (len!=sizeof(uint32_t)){
+
+static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int len)
+{
+    swarm_pkt_t pkt;
+    if (len != sizeof(pkt)) {   
         return;
     }
-    uint32_t counter;
-    memcpy(&counter,data,sizeof(counter));
-    printf("from %02X:%02X counter=%lu\n", info->src_addr[4], info->src_addr[5], (unsigned long)counter);}
+    
+    memcpy(&pkt, data, sizeof(pkt));
 
+    if (pkt.magic != PKT_MAGIC) {  
+        return;
+    }
+
+    printf("from %02X:%02X  seq=%lu\n",
+           info->src_addr[4], info->src_addr[5],
+           (unsigned long)pkt.seq);
+}
 #endif
 
 static void example_wifi_init(void)
@@ -87,11 +92,11 @@ static void example_wifi_init(void)
     #endif
 }
 static void print_station_mac(void){
-    uint8_t mac[6];
-    ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA,mac));
+    
+    ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA,g_my_mac));
     printf("Station MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
-        (unsigned)mac[0], (unsigned)mac[1], (unsigned)mac[2],
-        (unsigned)mac[3], (unsigned)mac[4], (unsigned)mac[5]);
+        (unsigned)g_my_mac[0], (unsigned)g_my_mac[1], (unsigned)g_my_mac[2],
+        (unsigned)g_my_mac[3], (unsigned)g_my_mac[4], (unsigned)g_my_mac[5]);
 }
 static void print_wifi_channel(void){
     uint8_t primary;
@@ -115,13 +120,12 @@ static void init_esp_now_broadcast(void){
     printf("ESP-NOW ready: broadcast peer registered\n");
 
 }
-// static void on_sent(const uint8_t*mac_addr, esp_now_send_status_t status){
 
-// }
 
 void app_main(void)
 {
     printf("honest_node: skeleton. Begin at Step 4.\n");
+    printf("sizeof(swarm_pkt_t) = %d\n", (int)sizeof(swarm_pkt_t));
     status_init();
     status_rgb(false, true, false);
     ESP_ERROR_CHECK(nvs_flash_init());
@@ -129,6 +133,7 @@ void app_main(void)
     print_wifi_channel();
     init_esp_now_broadcast();
     print_station_mac();
+
     #if ROLE_SENDER
     xTaskCreate(sender_task, "sender", 4096, NULL, 5, NULL);
     #endif
