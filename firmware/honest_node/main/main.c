@@ -22,58 +22,9 @@
 #include "esp_now.h"
 #include "string.h"
 
-#define ROLE_SENDER 1
+#define ROLE_SENDER 0
 #define ESP_NOW_CHANNEL 6
 const uint8_t broadcast_addr[ESP_NOW_ETH_ALEN]={ 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
-#if ROLE_SENDER
-        static void on_sent(const uint8_t *mac_addr,
-                    esp_now_send_status_t status);
-        static void sender_task(void *arg);
-#endif
-static void example_wifi_init(void)
-    {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
-    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
-    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK( esp_wifi_start());
-    ESP_ERROR_CHECK( esp_wifi_set_channel(ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
-    #if CONFIG_ESPNOW_ENABLE_LONG_RANGE
-    ESP_ERROR_CHECK( esp_wifi_set_protocol(ESPNOW_WIFI_IF, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N|WIFI_PROTOCOL_LR) );
-    #endif
-}
-static void print_station_mac(void){
-    uint8_t mac[6];
-    ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA,mac));
-    printf("Station MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
-        (unsigned)mac[0], (unsigned)mac[1], (unsigned)mac[2],
-        (unsigned)mac[3], (unsigned)mac[4], (unsigned)mac[5]);
-}
-static void print_wifi_channel(void){
-    uint8_t primary;
-    wifi_second_chan_t second;
-    ESP_ERROR_CHECK(esp_wifi_get_channel(&primary, &second));
-    printf("Wi-Fi primary channel: %u\n", (unsigned)primary);
-}
-static void init_esp_now_broadcast(void){
-    ESP_ERROR_CHECK(esp_now_init());
-    esp_now_peer_info_t peer = {0};
-    #if ROLE_SENDER
-       ESP_ERROR_CHECK(esp_now_register_send_cb(on_sent));
-    #endif
-    memcpy(peer.peer_addr, broadcast_addr, sizeof(broadcast_addr));
-    peer.channel=ESP_NOW_CHANNEL;
-    peer.ifidx=WIFI_IF_STA;
-    peer.encrypt=false;
-    ESP_ERROR_CHECK(esp_now_add_peer(&peer));
-    printf("ESP-NOW ready: broadcast peer registered\n");
-
-}
-// static void on_sent(const uint8_t*mac_addr, esp_now_send_status_t status){
-
-// }
 #if ROLE_SENDER
 
 static void on_sent(const uint8_t *mac_addr,
@@ -108,6 +59,65 @@ static void sender_task(void *arg)
 }
 
 #endif
+
+#if !ROLE_SENDER
+
+static void on_recv(const esp_now_recv_info_t * info, const uint8_t * data, int len){
+    if (len!=sizeof(uint32_t)){
+        return;
+    }
+    uint32_t counter;
+    memcpy(&counter,data,sizeof(counter));
+    printf("from %02X:%02X counter=%lu\n", info->src_addr[4], info->src_addr[5], (unsigned long)counter);}
+
+#endif
+
+static void example_wifi_init(void)
+    {
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
+    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
+    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
+    ESP_ERROR_CHECK( esp_wifi_start());
+    ESP_ERROR_CHECK( esp_wifi_set_channel(ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
+    #if CONFIG_ESPNOW_ENABLE_LONG_RANGE
+    ESP_ERROR_CHECK( esp_wifi_set_protocol(ESPNOW_WIFI_IF, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N|WIFI_PROTOCOL_LR) );
+    #endif
+}
+static void print_station_mac(void){
+    uint8_t mac[6];
+    ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA,mac));
+    printf("Station MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+        (unsigned)mac[0], (unsigned)mac[1], (unsigned)mac[2],
+        (unsigned)mac[3], (unsigned)mac[4], (unsigned)mac[5]);
+}
+static void print_wifi_channel(void){
+    uint8_t primary;
+    wifi_second_chan_t second;
+    ESP_ERROR_CHECK(esp_wifi_get_channel(&primary, &second));
+    printf("Wi-Fi primary channel: %u\n", (unsigned)primary);
+}
+static void init_esp_now_broadcast(void){
+    ESP_ERROR_CHECK(esp_now_init());
+    esp_now_peer_info_t peer = {0};
+    #if ROLE_SENDER
+       ESP_ERROR_CHECK(esp_now_register_send_cb(on_sent));
+    #else
+       ESP_ERROR_CHECK(esp_now_register_recv_cb(on_recv));
+    #endif
+    memcpy(peer.peer_addr, broadcast_addr, sizeof(broadcast_addr));
+    peer.channel=ESP_NOW_CHANNEL;
+    peer.ifidx=WIFI_IF_STA;
+    peer.encrypt=false;
+    ESP_ERROR_CHECK(esp_now_add_peer(&peer));
+    printf("ESP-NOW ready: broadcast peer registered\n");
+
+}
+// static void on_sent(const uint8_t*mac_addr, esp_now_send_status_t status){
+
+// }
 
 void app_main(void)
 {
