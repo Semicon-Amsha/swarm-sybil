@@ -15,7 +15,7 @@
 #include "string.h"
 #include "protocol.h"
 
-#define ROLE_SENDER 0
+#define ROLE_SENDER 1
 #define ESP_NOW_CHANNEL 6
 const uint8_t broadcast_addr[ESP_NOW_ETH_ALEN]={ 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 static uint8_t g_my_mac[6];
@@ -24,6 +24,8 @@ static volatile uint32_t g_received_count = 0;
 static volatile uint32_t g_baseline_seq   = 0;
 static volatile uint32_t g_last_seq       = 0;
 static volatile bool     g_have_baseline  = false;
+static volatile uint32_t g_csi_count = 0;
+static void csi_probe_cb(void *ctx, wifi_csi_info_t *info);
 
 #if ROLE_SENDER
 
@@ -61,8 +63,6 @@ static void sender_task(void *arg)
 #endif
 
 #if !ROLE_SENDER
-
-
 static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int len)
 {
     swarm_pkt_t pkt;
@@ -98,7 +98,22 @@ static void example_wifi_init(void)
     ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK( esp_wifi_start());
+    #if !ROLE_SENDER
+    wifi_csi_config_t csi_cfg = {
+    .lltf_en           = true,
+    .htltf_en          = false,
+    .stbc_htltf2_en    = false,
+    .ltf_merge_en      = true,
+    .channel_filter_en = false,   /* raw, no hardware smoothing */
+    .manu_scale        = false,};
+    ESP_ERROR_CHECK(esp_wifi_set_csi_config(&csi_cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_csi_rx_cb(csi_probe_cb, NULL));
+    ESP_ERROR_CHECK(esp_wifi_set_csi(true));
+    #endif
     ESP_ERROR_CHECK( esp_wifi_set_channel(ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
+    #if ROLE_SENDER
+    ESP_ERROR_CHECK(esp_wifi_config_espnow_rate(WIFI_IF_STA, WIFI_PHY_RATE_6M));
+    #endif
     #if CONFIG_ESPNOW_ENABLE_LONG_RANGE
     ESP_ERROR_CHECK( esp_wifi_set_protocol(ESPNOW_WIFI_IF, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N|WIFI_PROTOCOL_LR) );
     #endif
@@ -132,6 +147,10 @@ static void init_esp_now_broadcast(void){
     printf("ESP-NOW ready: broadcast peer registered\n");
 
 }
+static void csi_probe_cb(void *ctx, wifi_csi_info_t *info)
+{
+    g_csi_count++;
+}
 static void link_stat_task(void * arg){
     for (;;){
         vTaskDelay(pdMS_TO_TICKS(5000));
@@ -142,10 +161,12 @@ static void link_stat_task(void * arg){
         uint32_t actual= g_received_count;
 
         float loss_percent= (1-((float)actual/expected))*100;
-        printf("link: rx=%lu  expected=%lu  loss=%.2f%%\n",
-               (unsigned long)actual, (unsigned long)expected, loss_percent);
+        float csi2pktRto= g_csi_count/(float)g_received_count;
+        printf("link: rx=%lu  expected=%lu  loss=%.2f%%  CSI2PKT=%.2f\n",
+               (unsigned long)actual, (unsigned long)expected, loss_percent, csi2pktRto);
     }
 }
+
 void app_main(void)
 {
     printf("honest_node: skeleton. Begin at Step 4.\n");
