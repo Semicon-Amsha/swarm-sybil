@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -16,13 +15,20 @@
 #include "string.h"
 #include "protocol.h"
 #include "freertos/semphr.h"
+#include "esp_random.h"
+
 #define MAX_DEVICES 16
-#define ROLE_SENDER 0
+#define UPDATE_PERIOD_MS 250
+// #define ROLE_SENDER 0
 #define ESP_NOW_CHANNEL 6
 #define STALENESS 1500000
 
 const uint8_t broadcast_addr[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static uint8_t g_my_mac[6];
+static uint8_t g_my_mac_valid = 0;
+
+static volatile float g_x;
+static SemaphoreHandle_t g_x_mtx;
 
 static volatile uint32_t g_received_count = 0;
 static volatile uint32_t g_baseline_seq = 0;
@@ -71,13 +77,11 @@ static int alloc_slot_locked(const uint8_t id[6])
     {
         if (!g_nb[i].valid){
             memcpy(g_nb[i].id, id, 6);
-
             g_nb[i].valid = true;
             g_nb[i].state = 0.0f;
             g_nb[i].alpha = 1.0f;
             g_nb[i].last_seen_us = 0;
             g_nb[i].pkt_count = 0;
-
             return i;
         }
     }
@@ -95,18 +99,34 @@ static void wmsr_on_packet(const swarm_pkt_t *pkt){
     }
 
     xSemaphoreGive(g_mtx);
+
+
 }
 
+static void helper_g_x_update(float new_x){
+    xSemaphoreTake(g_x_mtx, portMAX_DELAY);
+    g_x=new_x;
+    xSemaphoreGive(g_x_mtx);
+}
 
-#if ROLE_SENDER
+static float helper_g_x_read(void){
+    xSemaphoreTake(g_x_mtx, portMAX_DELAY);
+    float v=g_x;
+    xSemaphoreGive(g_x_mtx);
+    return v;
+
+}
+
+// #if ROLE_SENDER
 
 static void on_sent(const uint8_t *mac_addr,
                     esp_now_send_status_t status)
 {
-    printf("ESP-NOW send: %s\n",
-           status == ESP_NOW_SEND_SUCCESS
-               ? "success"
-               : "failed");
+    
+        if (status != ESP_NOW_SEND_SUCCESS){
+            printf("ESP-NOW send: failed\n");
+        }
+
 }
 
 static void sender_task(void *arg)
@@ -117,6 +137,7 @@ static void sender_task(void *arg)
 
     for (;;)
     {
+        pkt.state = helper_g_x_read();
         esp_err_t err = esp_now_send(
             broadcast_addr,
             (const uint8_t *)&pkt,
@@ -126,14 +147,13 @@ static void sender_task(void *arg)
         {
             printf("ESP-NOW send request failed: %s\n", esp_err_to_name(err));
         }
-
         pkt.seq++;
         vTaskDelay(pdMS_TO_TICKS(200));
     }
 }
-#endif
+// #endif
 
-#if !ROLE_SENDER
+// #if !ROLE_SENDER
 static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int len)
 {
     swarm_pkt_t pkt;
@@ -149,6 +169,11 @@ static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int le
         return;
     }
 
+    if (memcmp(pkt.src_id, g_my_mac, 6) == 0)
+    {
+        return;
+    }
+
     wmsr_on_packet(&pkt);
 
     if (!g_have_baseline)
@@ -159,11 +184,11 @@ static void on_recv(const esp_now_recv_info_t *info, const uint8_t *data, int le
     g_last_seq = pkt.seq;
     g_received_count++;
 
-    printf("from %02X:%02X  seq=%lu\n",
-           info->src_addr[4], info->src_addr[5],
-           (unsigned long)pkt.seq);
+    // printf("from %02X:%02X  seq=%lu\n",
+    //        info->src_addr[4], info->src_addr[5],
+    //        (unsigned long)pkt.seq);
 }
-#endif
+// #endif
 
 static void example_wifi_init(void)
 {
@@ -174,7 +199,7 @@ static void example_wifi_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
-#if !ROLE_SENDER
+// #if !ROLE_SENDER
     wifi_csi_config_t csi_cfg = {
         .lltf_en = true,
         .htltf_en = false,
@@ -186,19 +211,24 @@ static void example_wifi_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_csi_config(&csi_cfg));
     ESP_ERROR_CHECK(esp_wifi_set_csi_rx_cb(csi_probe_cb, NULL));
     ESP_ERROR_CHECK(esp_wifi_set_csi(true));
-#endif
+// #endif
     ESP_ERROR_CHECK(esp_wifi_set_channel(ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
-#if ROLE_SENDER
+// #if ROLE_SENDER
     ESP_ERROR_CHECK(esp_wifi_config_espnow_rate(WIFI_IF_STA, WIFI_PHY_RATE_6M));
-#endif
+// #endif
 #if CONFIG_ESPNOW_ENABLE_LONG_RANGE
     ESP_ERROR_CHECK(esp_wifi_set_protocol(ESPNOW_WIFI_IF, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR));
 #endif
 }
 static void print_station_mac(void)
 {
+    if (g_my_mac_valid)
+    {
+        return;
+    }
 
     ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA, g_my_mac));
+    g_my_mac_valid = 1;
     printf("Station MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
            (unsigned)g_my_mac[0], (unsigned)g_my_mac[1], (unsigned)g_my_mac[2],
            (unsigned)g_my_mac[3], (unsigned)g_my_mac[4], (unsigned)g_my_mac[5]);
@@ -214,11 +244,11 @@ static void init_esp_now_broadcast(void)
 {
     ESP_ERROR_CHECK(esp_now_init());
     esp_now_peer_info_t peer = {0};
-#if ROLE_SENDER
+// #if ROLE_SENDER
     ESP_ERROR_CHECK(esp_now_register_send_cb(on_sent));
-#else
+// #else
     ESP_ERROR_CHECK(esp_now_register_recv_cb(on_recv));
-#endif
+// #endif
     memcpy(peer.peer_addr, broadcast_addr, sizeof(broadcast_addr));
     peer.channel = ESP_NOW_CHANNEL;
     peer.ifidx = WIFI_IF_STA;
@@ -266,10 +296,11 @@ static void print_neighbours_task(void *arg)
                 
                 if (g_nb[i].valid)
                 {
-                    printf(" [%02X:%02X seq=%lu]",
+                    printf(" [%02X:%02X seq=%lu, state=%.3f]",
                            g_nb[i].id[4],
                            g_nb[i].id[5],
-                           (unsigned long)g_nb[i].pkt_count);
+                           (unsigned long)g_nb[i].pkt_count,
+                           (double)g_nb[i].state);
                 }
             }
 
@@ -277,8 +308,33 @@ static void print_neighbours_task(void *arg)
 
             xSemaphoreGive(g_mtx);
         }
+        printf("my_x=%.3f\n", (double)helper_g_x_read());
 
         vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+static void update_task(void *arg)
+{
+    float vals[MAX_DEVICES + 1];
+    for (;;)
+    {
+        int n = 0;
+        int64_t now = esp_timer_get_time();
+
+        xSemaphoreTake(g_mtx, portMAX_DELAY);
+        for (int i = 0; i < MAX_DEVICES; i++)
+            if (g_nb[i].valid && (now - g_nb[i].last_seen_us) <= STALENESS)
+                vals[n++] = g_nb[i].state;
+        xSemaphoreGive(g_mtx);
+
+        vals[n++] = helper_g_x_read();   
+
+        float sum = 0.0f;
+        for (int i = 0; i < n; i++) sum += vals[i];
+        helper_g_x_update(sum / (float)n);
+
+        vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
     }
 }
 
@@ -290,23 +346,25 @@ void app_main(void)
     status_rgb(false, true, false);
     ESP_ERROR_CHECK(nvs_flash_init());
     g_mtx = xSemaphoreCreateMutex();
-
+    g_x_mtx = xSemaphoreCreateMutex();
     if(g_mtx == NULL){
         printf("Failed to create Mutex\n");
         return;
     }
 
     example_wifi_init();
+    helper_g_x_update((float)esp_random() / (float)UINT32_MAX);
+    printf("initial x = %.3f\n", (double)helper_g_x_read());
     print_wifi_channel();
-    init_esp_now_broadcast();
     print_station_mac();
+    init_esp_now_broadcast();
 
-
-#if ROLE_SENDER
+    xTaskCreate(update_task, "update", 4096, NULL, 5, NULL);
+    // #if ROLE_SENDER
     xTaskCreate(sender_task, "sender", 4096, NULL, 5, NULL);
-#endif
+// #endif
 
-#if !ROLE_SENDER
+// #if !ROLE_SENDER
     xTaskCreate(link_stat_task, "receiver", 4096, NULL, 5, NULL);
 
     xTaskCreate(print_neighbours_task,
@@ -315,7 +373,7 @@ void app_main(void)
                 NULL,
                 5,
                 NULL);
-#endif
+// #endif
 
     for (;;)
         vTaskDelay(pdMS_TO_TICKS(1000));
