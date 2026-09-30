@@ -16,9 +16,10 @@
 #include "string.h"
 #include "protocol.h"
 #include "freertos/semphr.h"
-#define MAX_DEVICES 8
-#define ROLE_SENDER 1
+#define MAX_DEVICES 16
+#define ROLE_SENDER 0
 #define ESP_NOW_CHANNEL 6
+#define STALENESS 1500000
 
 const uint8_t broadcast_addr[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static uint8_t g_my_mac[6];
@@ -258,6 +259,11 @@ static void print_neighbours_task(void *arg)
 
             for (int i = 0; i < MAX_DEVICES; i++)
             {
+                if (g_nb[i].valid && ((esp_timer_get_time()-g_nb[i].last_seen_us)> STALENESS)){
+                    g_nb[i].valid= false;
+                    continue;
+                }
+                
                 if (g_nb[i].valid)
                 {
                     printf(" [%02X:%02X seq=%lu]",
