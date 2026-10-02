@@ -4,5 +4,5 @@ idf_component_register(
          "../../common/csi_fp.c"
          "../../common/status_led.c"
     INCLUDE_DIRS "." "../../common"
-    REQUIRES esp_wifi esp_timer nvs_flash esp_event driver esp_ringbuf
+    REQUIRES esp_wifi esp_timer nvs_flash esp_event driver esp_ringbuf esp_adc
 )

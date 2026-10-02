@@ -15,7 +15,7 @@
 #include "string.h"
 #include "protocol.h"
 #include "freertos/semphr.h"
-#include "esp_random.h"
+#include "esp_adc/adc_oneshot.h"
 
 #define MAX_DEVICES 16
 #define UPDATE_PERIOD_MS 250
@@ -25,6 +25,9 @@
 const uint8_t broadcast_addr[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static uint8_t g_my_mac[6];
 static uint8_t g_my_mac_valid = 0;
+static adc_oneshot_unit_handle_t adc_handle;
+static volatile float g_lambda = 1.0f;
+static volatile float g_sensor;
 
 static volatile float g_x;
 static SemaphoreHandle_t g_x_mtx;
@@ -126,6 +129,31 @@ static void on_sent(const uint8_t *mac_addr,
 
 }
 
+static void conf_adc(void){
+    adc_oneshot_unit_init_cfg_t init_config={
+        .unit_id=ADC_UNIT_1,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config,&adc_handle));
+    adc_oneshot_chan_cfg_t channel_config={
+        .bitwidth= ADC_BITWIDTH_12,
+        .atten= ADC_ATTEN_DB_12,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle, ADC_CHANNEL_6, &channel_config));
+}
+float read_sensor(void){
+    int sum=0;
+    for (int i=0; i<16; i++){
+        int raw_value;
+        ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, ADC_CHANNEL_6, &raw_value));
+        sum+=raw_value;
+
+    }
+    
+    float average= sum / 16.0f;
+    float normalized_value= average / 4095.0f;
+    return normalized_value;
+}
+
 static void sender_task(void *arg)
 {
     swarm_pkt_t pkt = {0};
@@ -135,6 +163,7 @@ static void sender_task(void *arg)
     for (;;)
     {
         pkt.state = helper_g_x_read();
+        pkt.sensor = g_sensor;     
         esp_err_t err = esp_now_send(
             broadcast_addr,
             (const uint8_t *)&pkt,
@@ -283,7 +312,7 @@ static void print_neighbours_task(void *arg)
 
             xSemaphoreGive(g_mtx);
         }
-        printf("my_x=%.3f\n", (double)helper_g_x_read());
+        printf("my_x=%.3f, sensor=%.3f\n", (double)helper_g_x_read(), (double)read_sensor());
 
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
@@ -294,6 +323,8 @@ static void update_task(void *arg)
     float vals[MAX_DEVICES + 1];
     for (;;)
     {
+        float s = read_sensor();
+        g_sensor = s;
         int n = 0;
         int64_t now = esp_timer_get_time();
 
@@ -305,9 +336,11 @@ static void update_task(void *arg)
 
         vals[n++] = helper_g_x_read();   
 
-        float sum = 0.0f;
-        for (int i = 0; i < n; i++) sum += vals[i];
-        helper_g_x_update(sum / (float)n);
+        float num = g_lambda*s;
+        float denom = g_lambda;
+        for (int i = 0; i < n; i++) {num += vals[i]; denom += 1.0f;}
+        float sum = num / denom;
+        helper_g_x_update(sum);
 
         vTaskDelay(pdMS_TO_TICKS(UPDATE_PERIOD_MS));
     }
@@ -328,7 +361,10 @@ void app_main(void)
     }
 
     example_wifi_init();
-    helper_g_x_update((float)esp_random() / (float)UINT32_MAX);
+    conf_adc();
+    g_sensor = read_sensor();
+    // helper_g_x_update((float)esp_random() / (float)UINT32_MAX);
+    helper_g_x_update(read_sensor());
     printf("initial x = %.3f\n", (double)helper_g_x_read());
     print_wifi_channel();
     print_station_mac();
